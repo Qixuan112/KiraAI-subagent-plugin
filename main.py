@@ -1190,7 +1190,16 @@ class SubAgentPlugin(BasePlugin):
     def _make_stub_event(self, sid: str) -> KiraMessageBatchEvent:
         """构造子代理用的伪事件。关键：携带发起会话的真实 sid，
         使 file 插件的 allowed_exec_sessions / 其他按会话作用域的管控对子代理
-        与主 AI 语义一致。"""
+        与主 AI 语义一致。
+
+        ⚠ 兼容性（v1.1.3）：本事件会被广播给**所有**插件的 ON_TOOL_RESULT /
+        ON_LLM_RESPONSE 钩子，而它携带的是**真实会话 sid**、又**不会**经过框架的
+        ON_LLM_REQUEST（那个钩子只有 handle_im_batch_message 会派发）。凡是按会话
+        记账/判态的插件（例：聊天插件的 on_llm_response 存在感统计、Midflight 的
+        「运行中」状态机）都可能把子代理的输出误当成主 AI 的一轮。为此本事件带
+        **显式标记**，第三方插件可直接据此跳过：
+            is_stub = getattr(event, "is_subagent_stub", False) or (getattr(event, "extra", None) or {}).get("_subagent_stub")
+        """
         try:
             adapter_name, st, sess_id = sid.split(":", 2)
         except ValueError:
@@ -1204,13 +1213,21 @@ class SubAgentPlugin(BasePlugin):
             chain=MessageChain([]), timestamp=int(time.time()),
             session=session, group=Group(group_id=sess_id) if st == "gm" else None,
         )
-        return KiraMessageBatchEvent(
+        stub_event = KiraMessageBatchEvent(
             message_types=[],
             timestamp=int(time.time()),
             session=session,
             adapter=_STUB_ADAPTER,
             messages=[dummy_msg],
+            # 显式标记（见 docstring「兼容性」）：让按会话记账/判态的第三方插件
+            # 能一键识别「这不是主 AI 的一轮」，从而跳过本事件
+            extra={"_subagent_stub": True},
         )
+        try:
+            stub_event.is_subagent_stub = True   # 属性通道（双保险）
+        except Exception:
+            pass
+        return stub_event
 
     def _subagent_brief(self, tool_set: ToolSet, cfg: "SubAgentConfig | None" = None) -> str:
         if cfg is not None and cfg.tier == "coordinator":
