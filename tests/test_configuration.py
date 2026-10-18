@@ -13,7 +13,12 @@ PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 
 @pytest.fixture(scope="module")
 def plugin_module():
-    from core.plugin import registry
+    try:
+        # KiraAI 3.0 split the registry out of core.plugin; 2.x keeps the
+        # module at core.plugin.plugin_registry with the same attributes.
+        from core.plugin import registry
+    except ImportError:
+        from core.plugin import plugin_registry as registry
 
     module_name = "subagent_configuration_test"
     spec = importlib.util.spec_from_file_location(module_name, PLUGIN_ROOT / "main.py")
